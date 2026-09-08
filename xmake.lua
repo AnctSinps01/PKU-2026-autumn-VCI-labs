@@ -8,7 +8,7 @@ if is_plat("windows") then
     add_cxxflags("/utf-8")
 end
 
-add_requires("glad")
+add_requires("glad v0.1.36")
 add_requires("glfw")
 add_requires("glm")
 add_requires("imgui v1.89.9")
