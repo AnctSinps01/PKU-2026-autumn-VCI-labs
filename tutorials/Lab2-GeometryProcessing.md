@@ -4,11 +4,11 @@
 
 这次 lab 中，大家将会实现几何处理部分介绍的几种重要的算法或思想：
 
- 1. 几何表示中的 Loop Mesh Subdivision 算法 （[第八章讲义](https://vcl.pku.edu.cn/course/vci/notes/08-geometry-representation-notes.pdf)8.3节）
- 2. 几何表示中的 Spring-Mass Mesh Parameterization 算法 （[第八章讲义](https://vcl.pku.edu.cn/course/vci/notes/08-geometry-representation-notes.pdf)8.4节）
- 3. 几何处理中的 Mesh Simplification 算法 （[第十章讲义](https://vcl.pku.edu.cn/course/vci/notes/10-geometry-processing-notes.pdf)10.3节）
- 4. 几何处理中的 Mesh Smoothing 算法 （[第十章讲义](https://vcl.pku.edu.cn/course/vci/notes/10-geometry-processing-notes.pdf)10.2节）
- 5. 几何重建中的 Marching Cubes 算法 （[第十二章讲义](https://vcl.pku.edu.cn/course/vci/notes/12-geometry-reconstruction-notes.pdf)12.2.3节）
+ 1. 几何表示中的 Loop Mesh Subdivision 算法 （[电子书-11章](https://vcl-pku.github.io/vci-book/geometry/processing/subdivision.html)11.4节）
+ 2. 几何表示中的 Spring-Mass Mesh Parameterization 算法 （课件第八讲 P42）
+ 3. 几何处理中的 Mesh Simplification 算法 （[电子书-11章](https://vcl-pku.github.io/vci-book/geometry/processing/simplification.html)11.3节）
+ 4. 几何处理中的 Mesh Smoothing 算法 （[电子书-11章](https://vcl-pku.github.io/vci-book/geometry/processing/smoothing.html)11.2节）
+ 5. 几何重建中的 Marching Cubes 算法 （课件第十讲 P53）
 
 Lab 2 的算法难度会比 Lab 1 更高一些。大家的任务是填补 `src/VCX/Labs/2-GeometryProcessing/tasks.cpp` 中的空缺部分，每一个函数对应一个任务。请务必**独立**完成自己的代码。
 
