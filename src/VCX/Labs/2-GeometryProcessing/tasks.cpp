@@ -35,6 +35,20 @@ namespace VCX::Labs::GeometryProcessing {
                 auto v           = G.Vertex(i);
                 auto neighbors   = v->Neighbors();
                 // your code here:
+                if (v->OnBoundary()) {
+                    auto [nb0, nb1] = v->BoundaryNeighbors();
+                    curr_mesh.Positions.emplace_back(
+                        0.75f * prev_mesh.Positions[i] +
+                        0.125f * (prev_mesh.Positions[nb0] + prev_mesh.Positions[nb1]));
+                } else if (neighbors.size() >= 3u) {
+                    float n = neighbors.size();
+                    float beta = (0.625f - std::pow(0.375f + 0.25f * std::cos(2.f * 3.14159265f / n), 2.f)) / n;
+                    glm::vec3 sum(0.f);
+                    for (auto j : neighbors) sum += prev_mesh.Positions[j];
+                    curr_mesh.Positions.emplace_back((1.f - n * beta) * prev_mesh.Positions[i] + beta * sum);
+                } else {
+                    curr_mesh.Positions.emplace_back(prev_mesh.Positions[i]);
+                }
             }
             // We create an array to store indices of the newly generated vertices.
             // Note: newIndices[i][j] is the index of vertex generated on the "opposite edge" of j-th
@@ -49,6 +63,9 @@ namespace VCX::Labs::GeometryProcessing {
                 if (! eTwin) {
                     // When there is no twin halfedge (so, e is a boundary edge):
                     // your code here: generate the new vertex and add it into curr_mesh.Positions.
+                    // edge
+                    curr_mesh.Positions.emplace_back(
+                        0.5f * (prev_mesh.Positions[e->From()] + prev_mesh.Positions[e->To()]));
                 } else {
                     // When the twin halfedge exists, we should also record:
                     //     newIndices[face index][vertex index] = index of the newly generated vertex
@@ -56,6 +73,10 @@ namespace VCX::Labs::GeometryProcessing {
                     //     we have to record twice.
                     newIndices[G.IndexOf(eTwin->Face())][e->TwinEdge()->EdgeLabel()] = curr_mesh.Positions.size();
                     // your code here: generate the new vertex and add it into curr_mesh.Positions.
+                    // inside
+                    curr_mesh.Positions.emplace_back(
+                        0.375f * (prev_mesh.Positions[e->From()] + prev_mesh.Positions[e->To()]) +
+                        0.125f * (prev_mesh.Positions[e->OppositeVertex()] + prev_mesh.Positions[e->TwinOppositeVertex()]));
                 }
             }
 
@@ -75,6 +96,10 @@ namespace VCX::Labs::GeometryProcessing {
                 // toInsert[i][j] stores the j-th vertex index of the i-th sub-face.
                 std::uint32_t toInsert[4][3] = {
                     // your code here:
+                    { v0, m2, m1 },
+                    { v1, m0, m2 },
+                    { v2, m1, m0 },
+                    { m0, m1, m2 }
                 };
                 // Do insertion.
                 curr_mesh.Indices.insert(
@@ -110,10 +135,50 @@ namespace VCX::Labs::GeometryProcessing {
 
         // Set boundary UVs for boundary vertices.
         // your code here: directly edit output.TexCoords
+        size_t start = input.Positions.size();
+        for (size_t i = 0; i < input.Positions.size(); ++i)
+            if (G.Vertex(i)->OnBoundary()) { start = i; break; }
+
+        std::vector<size_t> boundary;
+        if (start < input.Positions.size()) {
+            size_t prev = input.Positions.size(), curr = start;
+            do {
+                boundary.emplace_back(curr);
+                auto [n0, n1] = G.Vertex(curr)->BoundaryNeighbors();
+                size_t next = (n0 == prev) ? n1 : n0;
+                prev = curr;
+                curr = next;
+            } while (curr != start);
+        }
+        if (!boundary.empty()) {
+            size_t B = boundary.size();
+            std::vector<float> cum(B +1, 0.f);
+            for (size_t i = 0; i < B; ++i)
+                cum[i +1] = cum[i] + glm::length(input.Positions[boundary[(i +1) % B]] - input.Positions[boundary[i]]);
+            float total = cum.back();
+            float invTotal = total > 0.f ? 4.f / total : 0.f;
+            for (size_t i = 0; i < B; ++i) {
+                float s = cum[i] * invTotal;
+                glm::vec2 uv(0.f);
+                if (s < 1.f)      uv = { s, 0.f };
+                else if (s < 2.f) uv = { 1.f, s - 1.f };
+                else if (s < 3.f) uv = { 3.f - s, 1.f };
+                else              uv = { 0.f, 4.f - s };
+                output.TexCoords[boundary[i]] = uv;
+            }
+        }
 
         // Solve equation via Gauss-Seidel Iterative Method.
         for (int k = 0; k < numIterations; ++k) {
             // your code here:
+            for (std::size_t i = 0; i < input.Positions.size(); ++i) {
+                auto v = G.Vertex(i);
+                if (v->OnBoundary()) continue;
+                auto neighbors = v->Neighbors();
+                glm::vec2 sum { 0.f };
+                for (auto j : neighbors) sum += output.TexCoords[j];
+                output.TexCoords[i] = sum / (float)(neighbors.size());
+            }
         }
     }
 
@@ -139,6 +204,18 @@ namespace VCX::Labs::GeometryProcessing {
             [&G, &output] (DCEL::Triangle const * f) -> glm::mat4 {
                 glm::mat4 Kp;
                 // your code here:
+                glm::vec3& p0 = output.Positions[f->VertexIndex(0)];
+                glm::vec3& p1 = output.Positions[f->VertexIndex(1)];
+                glm::vec3& p2 = output.Positions[f->VertexIndex(2)];
+                glm::vec3 n = glm::cross(p1 - p0, p2 - p0);
+                float len = glm::length(n);
+                if (len < 1e-12f) return glm::mat4(0.f);
+                n /= len;
+                float d = -glm::dot(n, p0);
+                glm::vec4 p(n, d);
+                for (int i = 0; i < 4; ++i)
+                    for (int j = 0; j < 4; ++j)
+                        Kp[i][j] = p[i] * p[j];
                 return Kp;
             }
         };
@@ -159,7 +236,30 @@ namespace VCX::Labs::GeometryProcessing {
                 glm::mat4 const & Q
             ) -> ContractionPair {
                 // your code here:
-                return {};
+                glm::mat3 A {
+                    glm::vec3(Q[0]),
+                    glm::vec3(Q[1]),
+                    glm::vec3(Q[2])
+                };
+                glm::vec3 b(Q[3]);
+                glm::vec3 target;
+                if (glm::abs(glm::determinant(A)) > 1e-3f) {
+                    target = glm::inverse(A) * (-b);
+                } else {
+                    const auto Cost = [&Q] (const glm::vec3& x) -> float {
+                        glm::vec4 v { x, 1.f };
+                        return glm::dot(v, Q * v);
+                    };
+                    glm::vec3 const mid = 0.5f * (p1 + p2);
+                    float c1 = Cost(p1);
+                    float c2 = Cost(p2);
+                    float cm = Cost(mid);
+                    if (c1 <= c2 && c1 <= cm)      target = p1;
+                    else if (c2 <= c1 && c2 <= cm) target = p2;
+                    else                           target = mid;
+                }
+                glm::vec4 v {target, 1.f};
+                return ContractionPair {edge, v, glm::dot(v, Q * v)};
             }
         };
 
@@ -199,7 +299,7 @@ namespace VCX::Labs::GeometryProcessing {
         while (G.NumOfVertices() > simplification_ratio * Qv.size()) {
             // Find the contractable pair with minimal cost.
             std::size_t min_idx = ~0;
-            for (std::size_t i = 1; i < pairs.size(); ++i) {
+            for (std::size_t i = 0; i < pairs.size(); ++i) {
                 if (! pairs[i].edge) continue;
                 if (!~min_idx || pairs[i].cost < pairs[min_idx].cost) {
                     if (G.IsContractable(pairs[i].edge)) min_idx = i;
@@ -246,11 +346,40 @@ namespace VCX::Labs::GeometryProcessing {
                 //        update Q matrix of each vertex on the ring (update $Qv$).
                 //     3. Update Q matrix of vertex v1 as well (update $Qv$).
                 //     4. Update $Kf$.
+                const DCEL::Triangle *f  = e->Face();
+                DCEL::FaceIdx fi = G.IndexOf(f);
+                glm::mat4 newKp = UpdateQ(f);
+                glm::mat4 delta = newKp - Kf[fi];
+                for (int i = 0; i < 3; ++i) {
+                    DCEL::VertexIdx vi = f->VertexIndex(i);
+                    if (vi == v1) Qv[vi] += newKp;
+                    else          Qv[vi] += delta;
+                }
+                Kf[fi] = newKp;
             }
 
             // Finally, as the Q matrix changed, we should update the relative $ContractionPair$ in $pairs$.
             // Any pair with the Q matrix of its endpoints changed, should be remade by $MakePair$.
             // your code here:
+            std::set<DCEL::VertexIdx> affected;
+            affected.insert(v1);
+            for (auto e : ring) {
+                affected.insert(e->From());
+                affected.insert(e->To());
+            }
+            for (DCEL::VertexIdx u : affected) {
+                for (auto re : G.Vertex(u)->Ring()) {
+                    DCEL::HalfEdge const * edge = re->PrevEdge();
+                    auto it = pair_map.find(G.IndexOf(edge));
+                    if (it == pair_map.end()) continue;
+                    std::size_t idx = it->second;
+                    if (! pairs[idx].edge) continue;
+                    auto u1 = edge->From();
+                    auto u2 = edge->To();
+                    pairs[idx] = MakePair(
+                        edge, output.Positions[u1], output.Positions[u2], Qv[u1] + Qv[u2]);
+                }
+            }
 
         }
 
@@ -269,7 +398,12 @@ namespace VCX::Labs::GeometryProcessing {
         static constexpr auto GetCotangent {
             [] (glm::vec3 vAngle, glm::vec3 v1, glm::vec3 v2) -> float {
                 // your code here:
-                return 0.0f;
+                glm::vec3 u = v1 - vAngle;
+                glm::vec3 v = v2 - vAngle;
+                float s = glm::length(glm::cross(u, v));
+                if (s < 1e-8f) return 0.0f;
+                float cot = glm::dot(u, v) / s;
+                return glm::clamp(cot, 0.0f, 1e3f);
             }
         };
 
@@ -290,6 +424,37 @@ namespace VCX::Labs::GeometryProcessing {
             Engine::SurfaceMesh curr_mesh = prev_mesh;
             for (std::size_t i = 0; i < input.Positions.size(); ++i) {
                 // your code here: curr_mesh.Positions[i] = ...
+                auto v = G.Vertex(i);
+                std::unordered_map<uint32_t, float> weights;
+                if (useUniformWeight) {
+                    for (auto j : v->Neighbors())
+                        weights[j] = 1.f;
+                } else {
+                    for (auto e : v->Ring()) {
+                        auto j = e->From();
+                        auto k = e->To();
+                        weights[j] += GetCotangent(
+                            prev_mesh.Positions[k],
+                            prev_mesh.Positions[i],
+                            prev_mesh.Positions[j]
+                        );
+                        weights[k] += GetCotangent(
+                            prev_mesh.Positions[j],
+                            prev_mesh.Positions[i],
+                            prev_mesh.Positions[k]
+                        );
+                    }
+                }
+                glm::vec3 sum(0.0f);
+                float wsum = 0.0f;
+                for (auto & [j, w] : weights) {
+                    sum  += w * prev_mesh.Positions[j];
+                    wsum += w;
+                }
+                if (wsum > 1e-8f)
+                    curr_mesh.Positions[i] = (1.0f - lambda) * prev_mesh.Positions[i] + lambda * (sum / wsum);
+                else
+                    curr_mesh.Positions[i] = prev_mesh.Positions[i];
             }
             // Move curr_mesh to prev_mesh.
             prev_mesh.Swap(curr_mesh);
@@ -303,5 +468,67 @@ namespace VCX::Labs::GeometryProcessing {
     /******************* 5. Marching Cubes *****************/
     void MarchingCubes(Engine::SurfaceMesh & output, const std::function<float(const glm::vec3 &)> & sdf, const glm::vec3 & grid_min, const float dx, const int n) {
         // your code here:
+        int N = n + 1;
+
+        auto gridPos = [&](int x, int y, int z) {
+            return grid_min + dx * glm::vec3(x, y, z);
+        };
+        auto gridIdx = [&](int x, int y, int z) {
+            return (z * N + y) * N + x;
+        };
+
+        std::vector<float> field(N * N * N);
+        for (int z = 0; z < N; ++z)
+            for (int y = 0; y < N; ++y)
+                for (int x = 0; x < N; ++x)
+                    field[gridIdx(x, y, z)] = sdf(gridPos(x, y, z));
+
+        output.Positions.clear();
+        output.Indices.clear();
+
+        std::vector<std::uint32_t> edgeVtx((std::size_t)N * N * N * 3, ~0u);
+        for (int axis = 0; axis < 3; ++axis)
+            for (int z = 0; z < N; ++z)
+                for (int y = 0; y < N; ++y)
+                    for (int x = 0; x < N; ++x) {
+                        if (axis == 0 && x == n) continue;
+                        if (axis == 1 && y == n) continue;
+                        if (axis == 2 && z == n) continue;
+                        int x1 = x, y1 = y, z1 = z;
+                        if (axis == 0) ++x1;
+                        if (axis == 1) ++y1;
+                        if (axis == 2) ++z1;
+                        float s0 = field[gridIdx(x, y, z)];
+                        float s1 = field[gridIdx(x1, y1, z1)];
+                        if ((s0 < 0.f) == (s1 < 0.f)) continue;
+                        float ratio = s0 / (s0 - s1);
+                        edgeVtx[(std::size_t)gridIdx(x, y, z) * 3 + axis] = (std::uint32_t)output.Positions.size();
+                        output.Positions.emplace_back(gridPos(x, y, z) + ratio * (gridPos(x1, y1, z1) - gridPos(x, y, z)));
+                    }
+
+        for (int z = 0; z < n; ++z)
+            for (int y = 0; y < n; ++y)
+                for (int x = 0; x < n; ++x) {
+                    std::uint32_t mask = 0;
+                    for (int c = 0; c < 8; ++c) {
+                        int cx = x + (c & 1);
+                        int cy = y + ((c >> 1) & 1);
+                        int cz = z + (c >> 2);
+                        if (field[gridIdx(cx, cy, cz)] < 0.f) mask |= 1u << c;
+                    }
+                    if (c_EdgeStateTable[mask] == 0) continue;
+                    for (int t = 0; t < 16; t += 3) {
+                        if (c_EdgeOrdsTable[mask][t] < 0) break;
+                        for (int m = 0; m < 3; ++m) {
+                            int e = c_EdgeOrdsTable[mask][t + m];
+                            int axis = e >> 2;
+                            int c0 = ((e & 1) << ((axis + 1) % 3)) | (((e >> 1) & 1) << ((axis + 2) % 3));
+                            int gx = x + (c0 & 1);
+                            int gy = y + ((c0 >> 1) & 1);
+                            int gz = z + (c0 >> 2);
+                            output.Indices.emplace_back(edgeVtx[(std::size_t)gridIdx(gx, gy, gz) * 3 + axis]);
+                        }
+                    }
+                }
     }
 } // namespace VCX::Labs::GeometryProcessing
