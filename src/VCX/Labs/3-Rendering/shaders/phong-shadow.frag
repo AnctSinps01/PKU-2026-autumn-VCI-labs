@@ -37,9 +37,7 @@ float Shadow(vec4 lightSpacePosition, vec3 normal, vec3 lightDir) {
     vec3 pos = lightSpacePosition.xyz / lightSpacePosition.w;
     pos = pos * 0.5 + 0.5;
 
-    // your code here: closestDepth = ?
-    float closestDepth = 0;
-    // your code end
+    float closestDepth = texture(u_ShadowMap, pos.xy).r;
 
     float curDepth = pos.z;
     float bias = max(1e-3 * (1.0 - dot(normal, lightDir)), 1e-4);
@@ -49,8 +47,10 @@ float Shadow(vec4 lightSpacePosition, vec3 normal, vec3 lightDir) {
 }
 
 vec3 Shade(vec3 lightIntensity, vec3 lightDir, vec3 normal, vec3 viewDir, vec3 diffuseColor, vec3 specularColor, float shininess) {
-    // your code here:
-    return vec3(0);
+    vec3  n    = normalize(normal);
+    float diff = max(dot(n, lightDir), 0.);
+    vec3  spec = specularColor * pow(max(dot(n, reflect(-lightDir, n)), 0.), shininess);
+    return lightIntensity * (diffuseColor * diff + spec);
 }
 
 void main() {

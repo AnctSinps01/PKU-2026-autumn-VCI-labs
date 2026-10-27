@@ -28,8 +28,9 @@ uniform vec3 u_CoolColor;
 uniform vec3 u_WarmColor;
 
 vec3 Shade (vec3 lightDir, vec3 normal) {
-    // your code here:
-    return vec3(0);
+    float t = dot(normalize(normal), normalize(lightDir)) * .5 + .5;
+    float tone = .6 * step(.52, t) + .4 * step(.80, t);
+    return mix(u_CoolColor, u_WarmColor, tone);
 }
 
 void main() {

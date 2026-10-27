@@ -37,16 +37,31 @@ uniform sampler2D u_SpecularMap;
 uniform sampler2D u_HeightMap;
 
 vec3 Shade(vec3 lightIntensity, vec3 lightDir, vec3 normal, vec3 viewDir, vec3 diffuseColor, vec3 specularColor, float shininess) {
-    // your code here:
-    return vec3(0);
+    vec3  n    = normalize(normal);
+    float diff = max(dot(n, lightDir), 0.);
+    vec3  spec;
+    if (u_UseBlinn)
+        spec = specularColor * pow(max(dot(n, normalize(lightDir + viewDir)), 0.), shininess);
+    else
+        spec = specularColor * pow(max(dot(n, reflect(-lightDir, n)), 0.), shininess);
+    return lightIntensity * (diffuseColor * diff + spec);
 }
 
 vec3 GetNormal() {
     // Bump mapping from paper: Bump Mapping Unparametrized Surfaces on the GPU
     vec3 vn = normalize(v_Normal);
 
-    // your code here:
-    vec3 bumpNormal = vn;
+    vec3  dp1 = dFdx(v_Position);
+    vec3  dp2 = dFdy(v_Position);
+    vec2  duv1 = dFdx(v_TexCoord);
+    vec2  duv2 = dFdy(v_TexCoord);
+    vec3  dp2perp = cross(dp2, vn);
+    vec3  dp1perp = cross(vn, dp1);
+    vec3  T = dp2perp * duv1.x + dp1perp * duv2.x;
+    vec3  B = dp2perp * duv1.y + dp1perp * duv2.y;
+    float invmax = inversesqrt(max(dot(T, T), dot(B, B)));
+    vec2  dHdxy = vec2(dFdx(texture(u_HeightMap, v_TexCoord).r), dFdy(texture(u_HeightMap, v_TexCoord).r));
+    vec3  bumpNormal = normalize(mat3(T * invmax, B * invmax, vn) * vec3(-dHdxy * 3., 1.));
 
     return bumpNormal != bumpNormal ? vn : normalize(vn * (1. - u_BumpMappingBlend) + bumpNormal * u_BumpMappingBlend);
 }
