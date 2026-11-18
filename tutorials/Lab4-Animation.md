@@ -4,8 +4,8 @@
 
 本次 Lab 中，大家将会实现两种动画生成的算法：
 
-1. 逆向运动学 (Inverse Kinematics)（[第十八章讲义](https://vcl.pku.edu.cn/course/vci/notes/18-animation-notes.pdf)18.2.3节）
-2. 弹簧质点系统 (Mass-Spring System) （[第十七章讲义](https://vcl.pku.edu.cn/course/vci/notes/17-physics-notes.pdf)17.1节）
+1. 逆向运动学 (Inverse Kinematics)（第十九章讲义 18.2.3节）
+2. 弹簧质点系统 (Mass-Spring System) （第十八章讲义 17.1节）
 
 ## 评分
 
