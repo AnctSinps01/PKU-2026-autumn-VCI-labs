@@ -1,81 +1,112 @@
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
-#include <spdlog/spdlog.h>
-#include <iostream>
+#include <algorithm>
 #include "Labs/4-Animation/tasks.h"
-#include "IKSystem.h"
-#include "CustomFunc.inl"
-
 
 namespace VCX::Labs::Animation {
+    static glm::quat RotationBetween(glm::vec3 const & from, glm::vec3 const & to) {
+        float const cosine = glm::dot(from, to);
+        if (cosine < -0.999999f) return glm::rotation(from, to);
+        glm::vec3 const axis = glm::cross(from, to);
+        return glm::normalize(glm::quat(1.f + cosine, axis.x, axis.y, axis.z));
+    }
+
     void ForwardKinematics(IKSystem & ik, int StartIndex) {
         if (StartIndex == 0) {
             ik.JointGlobalRotation[0] = ik.JointLocalRotation[0];
             ik.JointGlobalPosition[0] = ik.JointLocalOffset[0];
-            StartIndex                = 1;
+            StartIndex = 1;
         }
-        
-        for (int i = StartIndex; i < ik.JointLocalOffset.size(); i++) {
-            // your code here: forward kinematics, update JointGlobalPosition and JointGlobalRotation
+        for (int i = StartIndex; i < ik.NumJoints(); ++i) {
+            ik.JointGlobalPosition[i] = ik.JointGlobalPosition[i - 1]
+                + ik.JointGlobalRotation[i - 1] * ik.JointLocalOffset[i];
+            ik.JointGlobalRotation[i] = glm::normalize(ik.JointGlobalRotation[i - 1] * ik.JointLocalRotation[i]);
+        }
+    }
+
+    static void PrepareIK(IKSystem & ik, glm::vec3 const & target, float eps) {
+        ForwardKinematics(ik, 0);
+        glm::vec3 const direction = ik.EndEffectorPosition() - ik.JointGlobalPosition[0];
+        glm::vec3 const toTarget = target - ik.JointGlobalPosition[0];
+        if (glm::length2(glm::cross(direction, toTarget)) < 1e-12f && glm::distance(ik.EndEffectorPosition(), target) > eps) {
+            glm::vec3 axis = glm::cross(glm::normalize(direction), glm::vec3(1, 0, 0));
+            if (glm::length2(axis) < 1e-12f) axis = glm::cross(glm::normalize(direction), glm::vec3(0, 0, 1));
+            glm::vec3 const localAxis = glm::inverse(ik.JointGlobalRotation[0]) * glm::normalize(axis);
+            ik.JointLocalRotation[1] = glm::angleAxis(.01f, localAxis) * ik.JointLocalRotation[1];
+            ForwardKinematics(ik, 0);
         }
     }
 
     void InverseKinematicsCCD(IKSystem & ik, const glm::vec3 & EndPosition, int maxCCDIKIteration, float eps) {
-        ForwardKinematics(ik, 0);
-        // These functions will be useful: glm::normalize, glm::rotation, glm::quat * glm::quat
-        for (int CCDIKIteration = 0; CCDIKIteration < maxCCDIKIteration && glm::l2Norm(ik.EndEffectorPosition() - EndPosition) > eps; CCDIKIteration++) {
-            // your code here: ccd ik
+        PrepareIK(ik, EndPosition, eps);
+        for (int iteration = 0; iteration < maxCCDIKIteration && glm::distance(ik.EndEffectorPosition(), EndPosition) > eps; ++iteration) {
+            for (int i = ik.NumJoints() - 2; i >= 0; --i) {
+                glm::vec3 toEnd = ik.EndEffectorPosition() - ik.JointGlobalPosition[i];
+                glm::vec3 toTarget = EndPosition - ik.JointGlobalPosition[i];
+                if (glm::length2(toEnd) < 1e-12f || glm::length2(toTarget) < 1e-12f) continue;
+                glm::quat rotation = RotationBetween(glm::normalize(toEnd), glm::normalize(toTarget));
+                glm::quat global = rotation * ik.JointGlobalRotation[i];
+                ik.JointLocalRotation[i] = glm::normalize(i == 0 ? global : glm::inverse(ik.JointGlobalRotation[i - 1]) * global);
+                ForwardKinematics(ik, i);
+            }
         }
     }
 
     void InverseKinematicsFABR(IKSystem & ik, const glm::vec3 & EndPosition, int maxFABRIKIteration, float eps) {
-        ForwardKinematics(ik, 0);
-        int nJoints = ik.NumJoints();
-        std::vector<glm::vec3> backward_positions(nJoints, glm::vec3(0, 0, 0)), forward_positions(nJoints, glm::vec3(0, 0, 0));
-        for (int IKIteration = 0; IKIteration < maxFABRIKIteration && glm::l2Norm(ik.EndEffectorPosition() - EndPosition) > eps; IKIteration++) {
-            // task: fabr ik
-            // backward update
-            glm::vec3 next_position         = EndPosition;
-            backward_positions[nJoints - 1] = EndPosition;
-
-            for (int i = nJoints - 2; i >= 0; i--) {
-                // your code here
+        PrepareIK(ik, EndPosition, eps);
+        int const n = ik.NumJoints();
+        glm::vec3 const root = ik.JointGlobalPosition[0];
+        float length = 0;
+        for (int i = 1; i < n; ++i) length += ik.JointOffsetLength[i];
+        if (glm::distance(root, EndPosition) >= length) {
+            glm::vec3 direction = glm::normalize(EndPosition - root);
+            for (int i = 1; i < n; ++i)
+                ik.JointGlobalPosition[i] = ik.JointGlobalPosition[i - 1] + ik.JointOffsetLength[i] * direction;
+        } else {
+            for (int iteration = 0; iteration < maxFABRIKIteration && glm::distance(ik.EndEffectorPosition(), EndPosition) > eps; ++iteration) {
+                auto const previous = ik.JointGlobalPosition;
+                ik.JointGlobalPosition[n - 1] = EndPosition;
+                for (int i = n - 2; i >= 0; --i) {
+                    glm::vec3 direction = ik.JointGlobalPosition[i] - ik.JointGlobalPosition[i + 1];
+                    if (glm::length2(direction) < 1e-12f) direction = previous[i] - previous[i + 1];
+                    ik.JointGlobalPosition[i] = ik.JointGlobalPosition[i + 1] + ik.JointOffsetLength[i + 1] * glm::normalize(direction);
+                }
+                ik.JointGlobalPosition[0] = root;
+                for (int i = 1; i < n; ++i) {
+                    glm::vec3 direction = ik.JointGlobalPosition[i] - ik.JointGlobalPosition[i - 1];
+                    if (glm::length2(direction) < 1e-12f) direction = previous[i] - previous[i - 1];
+                    ik.JointGlobalPosition[i] = ik.JointGlobalPosition[i - 1] + ik.JointOffsetLength[i] * glm::normalize(direction);
+                }
             }
-
-            // forward update
-            glm::vec3 now_position = ik.JointGlobalPosition[0];
-            forward_positions[0] = ik.JointGlobalPosition[0];
-            for (int i = 0; i < nJoints - 1; i++) {
-                // your code here
-            }
-            ik.JointGlobalPosition = forward_positions; // copy forward positions to joint_positions
         }
-
-        // Compute joint rotation by position here.
-        for (int i = 0; i < nJoints - 1; i++) {
-            ik.JointGlobalRotation[i] = glm::rotation(glm::normalize(ik.JointLocalOffset[i + 1]), glm::normalize(ik.JointGlobalPosition[i + 1] - ik.JointGlobalPosition[i]));
-        }
+        for (int i = 0; i < n - 1; ++i)
+            ik.JointGlobalRotation[i] = RotationBetween(glm::normalize(ik.JointLocalOffset[i + 1]),
+                glm::normalize(ik.JointGlobalPosition[i + 1] - ik.JointGlobalPosition[i]));
         ik.JointLocalRotation[0] = ik.JointGlobalRotation[0];
-        for (int i = 1; i < nJoints - 1; i++) {
-            ik.JointLocalRotation[i] = glm::inverse(ik.JointGlobalRotation[i - 1]) * ik.JointGlobalRotation[i];
-        }
+        for (int i = 1; i < n - 1; ++i)
+            ik.JointLocalRotation[i] = glm::normalize(glm::inverse(ik.JointGlobalRotation[i - 1]) * ik.JointGlobalRotation[i]);
         ForwardKinematics(ik, 0);
     }
 
     IKSystem::Vec3ArrPtr IKSystem::BuildCustomTargetPosition() {
-        // get function from https://www.wolframalpha.com/input/?i=Albert+Einstein+curve
-        int nums = 5000;
-        using Vec3Arr = std::vector<glm::vec3>;
-        std::shared_ptr<Vec3Arr> custom(new Vec3Arr(nums));
-        int index = 0;
-        for (int i = 0; i < nums; i++) {
-            float x_val = 1.5e-3f * custom_x(92 * glm::pi<float>() * i / nums);
-            float y_val = 1.5e-3f * custom_y(92 * glm::pi<float>() * i / nums);
-            if (std::abs(x_val) < 1e-3 || std::abs(y_val) < 1e-3) continue;
-            (*custom)[index++] = glm::vec3(1.6f - x_val, 0.0f, y_val - 0.2f);
+        auto points = std::make_shared<Vec3Arr>();
+        auto line = [&](glm::vec3 const & a, glm::vec3 const & b, int samples) {
+            for (int i = 0; i < samples; ++i)
+                points->push_back(glm::mix(a, b, float(i) / samples));
+        };
+        glm::vec3 const v[] = {{-.9f, 0, .4f}, {-.6f, 0, -.4f}, {-.3f, 0, .4f}};
+        line(v[0], v[1], 80);
+        line(v[1], v[2], 80);
+        for (int i = 0; i < 160; ++i) {
+            float angle = glm::radians(45.f + 270.f * i / 160.f);
+            points->emplace_back(.15f + .424264f * std::cos(angle), 0, .494975f * std::sin(angle));
         }
-        custom->resize(index);
-        return custom;
+        line({.65f, 0, -.4f}, {.95f, 0, -.4f}, 30);
+        line({.95f, 0, -.4f}, {.8f, 0, -.4f}, 15);
+        line({.8f, 0, -.4f}, {.8f, 0, .4f}, 80);
+        line({.8f, 0, .4f}, {.65f, 0, .4f}, 15);
+        line({.65f, 0, .4f}, {.95f, 0, .4f}, 30);
+        return points;
     }
 
     static Eigen::VectorXf glm2eigen(std::vector<glm::vec3> const & glm_v) {
@@ -105,26 +136,52 @@ namespace VCX::Labs::Animation {
     }
 
     void AdvanceMassSpringSystem(MassSpringSystem & system, float const dt) {
-        // your code here: rewrite following code
-        int const steps = 1000;
-        float const ddt = dt / steps; 
-        for (std::size_t s = 0; s < steps; s++) {
-            std::vector<glm::vec3> forces(system.Positions.size(), glm::vec3(0));
-            for (auto const spring : system.Springs) {
-                auto const p0 = spring.AdjIdx.first;
-                auto const p1 = spring.AdjIdx.second;
-                glm::vec3 const x01 = system.Positions[p1] - system.Positions[p0];
-                glm::vec3 const v01 = system.Velocities[p1] - system.Velocities[p0];
-                glm::vec3 const e01 = glm::normalize(x01);
-                glm::vec3 f = (system.Stiffness * (glm::length(x01) - spring.RestLength) + system.Damping * glm::dot(v01, e01)) * e01;
-                forces[p0] += f;
-                forces[p1] -= f;
-            }
-            for (std::size_t i = 0; i < system.Positions.size(); i++) {
-                if (system.Fixed[i]) continue;
-                system.Velocities[i] += (glm::vec3(0, -system.Gravity, 0) + forces[i] / system.Mass) * ddt;
-                system.Positions[i] += system.Velocities[i] * ddt;
-            }
+        int const n = static_cast<int>(system.Positions.size());
+        Eigen::VectorXf rhs = Eigen::VectorXf::Zero(3 * n);
+        std::vector<Eigen::Triplet<float>> triplets;
+        triplets.reserve(3 * n + 36 * system.Springs.size());
+        for (int i = 0; i < n; ++i) {
+            for (int axis = 0; axis < 3; ++axis)
+                triplets.emplace_back(3 * i + axis, 3 * i + axis, system.Fixed[i] ? 1.f : system.Mass);
+            if (system.Fixed[i]) system.Velocities[i] = glm::vec3(0);
+            else rhs[3 * i + 1] = -dt * system.Mass * system.Gravity;
+        }
+        auto addBlock = [&](int i, int j, Eigen::Matrix3f const & block) {
+            if (system.Fixed[i] || system.Fixed[j]) return;
+            for (int row = 0; row < 3; ++row)
+                for (int col = 0; col < 3; ++col)
+                    triplets.emplace_back(3 * i + row, 3 * j + col, block(row, col));
+        };
+        for (auto const & spring : system.Springs) {
+            int const i = static_cast<int>(spring.AdjIdx.first);
+            int const j = static_cast<int>(spring.AdjIdx.second);
+            glm::vec3 const displacement = system.Positions[j] - system.Positions[i];
+            float const length = glm::length(displacement);
+            glm::vec3 const direction = displacement / length;
+            glm::vec3 const relativeVelocity = system.Velocities[j] - system.Velocities[i];
+            Eigen::Vector3f const e(direction.x, direction.y, direction.z);
+            Eigen::Vector3f const v(relativeVelocity.x, relativeVelocity.y, relativeVelocity.z);
+            Eigen::Matrix3f const outer = e * e.transpose();
+            Eigen::Matrix3f const stiffness = system.Stiffness * (outer
+                + std::max(0.f, 1.f - spring.RestLength / length) * (Eigen::Matrix3f::Identity() - outer));
+            Eigen::Matrix3f const damping = system.Damping * outer;
+            Eigen::Vector3f const force = (system.Stiffness * (length - spring.RestLength)
+                + system.Damping * e.dot(v)) * e;
+            Eigen::Vector3f const impulse = dt * force + dt * dt * stiffness * v;
+            if (!system.Fixed[i]) rhs.segment<3>(3 * i) += impulse;
+            if (!system.Fixed[j]) rhs.segment<3>(3 * j) -= impulse;
+            Eigen::Matrix3f const block = dt * damping + dt * dt * stiffness;
+            addBlock(i, i, block);
+            addBlock(j, j, block);
+            addBlock(i, j, -block);
+            addBlock(j, i, -block);
+        }
+        auto const matrix = CreateEigenSparseMatrix(3 * n, triplets);
+        auto const deltaVelocity = eigen2glm(ComputeSimplicialLLT(matrix, rhs));
+        for (int i = 0; i < n; ++i) {
+            if (system.Fixed[i]) continue;
+            system.Velocities[i] += deltaVelocity[i];
+            system.Positions[i] += dt * system.Velocities[i];
         }
     }
 }
